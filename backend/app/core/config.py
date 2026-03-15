@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     OLD_PROJECT_PATH: str = "/home/dff652/TS-anomaly-detection/ts-iteration-loop"
     OLD_EXECUTOR_SCRIPT: str = "services/inference/run.py"
     OLD_PYTHON_PATH: str = "/home/dff652/miniconda3/envs/ts/bin/python"
+    # GPU algorithms need newer Python + transformers, use chatts conda env
+    GPU_PYTHON_PATH: str = "/home/dff652/miniconda3/envs/chatts/bin/python"
 
     # Data paths
     DATA_ROOT: str = str(DATA_DIR)

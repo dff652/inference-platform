@@ -140,8 +140,9 @@ def run_inference_task(self, task_id: int):
         output_dir=output_dir,
         model_path=params.get("model_path"),
         lora_adapter_path=params.get("lora_adapter_path"),
-        load_in_4bit=params.get("load_in_4bit", False),
+        load_in_4bit=params.get("load_in_4bit", "auto"),
         n_downsample=params.get("n_downsample", 5000),
+        device=params.get("device"),
         extra_args=params.get("extra_args", {}),
     )
 

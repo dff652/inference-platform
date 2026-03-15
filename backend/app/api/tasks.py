@@ -94,10 +94,21 @@ async def cancel_task(task_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{task_id}/retry", response_model=TaskResponse)
 async def retry_task(task_id: int, db: AsyncSession = Depends(get_db)):
+    """Retry a failed/timeout task: reset to PENDING and dispatch to Celery."""
+    from app.core.celery_app import run_inference_task
+
     try:
         task = await TaskService.retry_task(db, task_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    # Commit PENDING status then dispatch
+    await db.commit()
+    celery_result = run_inference_task.delay(task_id)
+    task.celery_task_id = celery_result.id
+    await db.commit()
+
+    await db.refresh(task)
     return task
 
 
