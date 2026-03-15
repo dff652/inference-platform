@@ -7,7 +7,7 @@ services:
       - "8100:8100"
     volumes:
       - ./data:/app/data
-      - /home/share/data:/home/share/data
+      - ./backend/data:/app/backend_data
     environment:
       - DEBUG=false
       - REDIS_URL=redis://redis:6379/0
@@ -15,7 +15,10 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - DATABASE_URL=sqlite+aiosqlite:///./data/inference_platform.db
       - DATABASE_SYNC_URL=sqlite:///./data/inference_platform.db
-      - OLD_PROJECT_PATH=/home/dff652/TS-anomaly-detection/ts-iteration-loop
+      - OLD_PROJECT_PATH=/opt/ts-inference
+      - OLD_PYTHON_PATH=/opt/conda/envs/ts/bin/python
+      - GPU_PYTHON_PATH=/opt/conda/envs/chatts/bin/python
+      - DATA_INFERENCE_DIR=/app/backend_data/inference
     depends_on:
       - redis
     restart: unless-stopped
@@ -26,19 +29,36 @@ services:
       dockerfile: docker/Dockerfile
     volumes:
       - ./data:/app/data
-      - /home/share/data:/home/share/data
-      - /home/dff652/TS-anomaly-detection/ts-iteration-loop:/home/dff652/TS-anomaly-detection/ts-iteration-loop:ro
+      - ./backend/data:/app/backend_data
+      # 旧项目挂载（推理脚本）
+      - ${OLD_PROJECT_PATH:-/home/dff652/TS-anomaly-detection/ts-iteration-loop}:/opt/ts-inference:ro
+      # 模型权重挂载
+      - ${MODEL_DIR:-/home/data1/llm_models}:/models:ro
+      # conda 环境挂载（宿主机推理环境）
+      - ${CONDA_PREFIX:-/home/dff652/miniconda3}:/opt/conda:ro
     environment:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - DATABASE_URL=sqlite+aiosqlite:///./data/inference_platform.db
       - DATABASE_SYNC_URL=sqlite:///./data/inference_platform.db
-      - OLD_PROJECT_PATH=/home/dff652/TS-anomaly-detection/ts-iteration-loop
+      - OLD_PROJECT_PATH=/opt/ts-inference
+      - OLD_PYTHON_PATH=/opt/conda/envs/ts/bin/python
+      - GPU_PYTHON_PATH=/opt/conda/envs/chatts/bin/python
+      - DATA_INFERENCE_DIR=/app/backend_data/inference
+      - NVIDIA_VISIBLE_DEVICES=all
     depends_on:
       - redis
     command: celery -A app.core.celery_app worker --loglevel=info
     restart: unless-stopped
+    # GPU 支持（需要 nvidia-container-toolkit）
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   redis:
     image: redis:7-alpine
