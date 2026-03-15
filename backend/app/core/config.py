@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     OLD_PYTHON_PATH: str = "/home/dff652/miniconda3/envs/ts/bin/python"
 
     # Data paths
-    DATA_ROOT: str = "/home/share/data"
-    DATA_INFERENCE_DIR: str = "/home/share/data/inference"
+    DATA_ROOT: str = str(DATA_DIR)
+    DATA_INFERENCE_DIR: str = str(DATA_DIR / "inference")
     MODEL_ARTIFACT_DIR: str = "/home/share/models"
 
     # API
