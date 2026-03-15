@@ -10,11 +10,11 @@ const editingModel = ref(null)
 
 const form = ref({
   name: '',
-  algorithm_type: '',
+  family: '',
+  runtime_type: '',
   version: '',
   artifact_uri: '',
   description: '',
-  compatibility_info: {},
 })
 
 const statusColors = {
@@ -22,6 +22,8 @@ const statusColors = {
   archived: 'info',
   disabled: 'danger',
 }
+
+const runtimeTypes = ['transformers', 'transformers+lora', 'sklearn', 'scipy', 'vllm']
 
 async function fetchModels() {
   loading.value = true
@@ -35,7 +37,7 @@ async function fetchModels() {
 
 function openCreate() {
   editingModel.value = null
-  form.value = { name: '', algorithm_type: '', version: '', artifact_uri: '', description: '', compatibility_info: {} }
+  form.value = { name: '', family: '', runtime_type: '', version: '', artifact_uri: '', description: '' }
   dialogVisible.value = true
 }
 
@@ -43,26 +45,30 @@ function openEdit(model) {
   editingModel.value = model
   form.value = {
     name: model.name,
-    algorithm_type: model.algorithm_type,
+    family: model.family,
+    runtime_type: model.runtime_type,
     version: model.version,
-    artifact_uri: model.artifact_uri,
+    artifact_uri: model.artifact_uri || '',
     description: model.description || '',
-    compatibility_info: model.compatibility_info || {},
   }
   dialogVisible.value = true
 }
 
 async function handleSave() {
-  if (!form.value.name || !form.value.algorithm_type) {
-    ElMessage.warning('Name and algorithm type are required')
+  if (!form.value.name || !form.value.family || !form.value.runtime_type || !form.value.version) {
+    ElMessage.warning('Name, family, runtime type, and version are required')
     return
   }
   try {
+    const payload = { ...form.value }
+    if (!payload.artifact_uri) payload.artifact_uri = null
+    if (!payload.description) payload.description = null
+
     if (editingModel.value) {
-      await modelApi.update(editingModel.value.id, form.value)
+      await modelApi.update(editingModel.value.id, payload)
       ElMessage.success('Model updated')
     } else {
-      await modelApi.create(form.value)
+      await modelApi.create(payload)
       ElMessage.success('Model created')
     }
     dialogVisible.value = false
@@ -99,20 +105,21 @@ onMounted(fetchModels)
 
     <el-table :data="models" v-loading="loading" stripe>
       <el-table-column prop="id" label="ID" width="60" />
-      <el-table-column prop="name" label="Name" min-width="180" />
-      <el-table-column prop="algorithm_type" label="Algorithm" width="130" />
-      <el-table-column prop="version" label="Version" width="100" />
-      <el-table-column prop="status" label="Status" width="100">
+      <el-table-column prop="name" label="Name" min-width="160" />
+      <el-table-column prop="family" label="Family" width="130" />
+      <el-table-column prop="runtime_type" label="Runtime" width="140" />
+      <el-table-column prop="version" label="Version" width="80" />
+      <el-table-column prop="status" label="Status" width="90">
         <template #default="{ row }">
           <el-tag :type="statusColors[row.status]" size="small">{{ row.status }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="artifact_uri" label="Artifact URI" min-width="250" show-overflow-tooltip />
-      <el-table-column label="Created" width="170">
+      <el-table-column label="Tags" min-width="180">
         <template #default="{ row }">
-          {{ new Date(row.created_at).toLocaleString() }}
+          <el-tag v-for="t in (row.tags || [])" :key="t" size="small" style="margin-right: 4px" type="info">{{ t }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column prop="artifact_uri" label="Artifact URI" min-width="200" show-overflow-tooltip />
       <el-table-column label="Actions" width="220" fixed="right">
         <template #default="{ row }">
           <el-button size="small" @click="openEdit(row)">Edit</el-button>
@@ -132,17 +139,22 @@ onMounted(fetchModels)
         <el-form-item label="Name" required>
           <el-input v-model="form.name" placeholder="e.g. ChatTS-8B" />
         </el-form-item>
-        <el-form-item label="Algorithm" required>
-          <el-select v-model="form.algorithm_type" placeholder="Select" style="width: 100%">
+        <el-form-item label="Family" required>
+          <el-select v-model="form.family" placeholder="Select" style="width: 100%">
             <el-option label="ChatTS" value="chatts" />
-            <el-option label="Qwen-VL" value="qwen" />
+            <el-option label="Qwen" value="qwen" />
             <el-option label="ADTK-HBOS" value="adtk_hbos" />
             <el-option label="Ensemble" value="ensemble" />
             <el-option label="Wavelet" value="wavelet" />
             <el-option label="Isolation Forest" value="isolation_forest" />
           </el-select>
         </el-form-item>
-        <el-form-item label="Version">
+        <el-form-item label="Runtime Type" required>
+          <el-select v-model="form.runtime_type" placeholder="Select" style="width: 100%">
+            <el-option v-for="rt in runtimeTypes" :key="rt" :label="rt" :value="rt" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Version" required>
           <el-input v-model="form.version" placeholder="e.g. v1.0" />
         </el-form-item>
         <el-form-item label="Artifact URI">

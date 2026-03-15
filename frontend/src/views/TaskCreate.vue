@@ -25,7 +25,12 @@ const gpuAlgorithms = ['chatts', 'qwen']
 onMounted(async () => {
   try {
     const res = await configApi.algorithms()
-    algorithms.value = res.data.algorithms || res.data
+    // API returns [{id, name, display_name, description}, ...]
+    algorithms.value = (res.data.algorithms || res.data).map(a => ({
+      name: a.name,
+      label: a.display_name || a.name,
+      resource: ['chatts', 'qwen'].includes(a.name) ? 'gpu' : 'cpu',
+    }))
   } catch {
     algorithms.value = [
       { name: 'chatts', label: 'ChatTS-8B', resource: 'gpu' },
