@@ -1,0 +1,50 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8100:8100"
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+      - /home/share/data:/home/share/data
+    environment:
+      - DEBUG=true
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - DATABASE_URL=sqlite+aiosqlite:///./data/inference_platform.db
+      - DATABASE_SYNC_URL=sqlite:///./data/inference_platform.db
+      - OLD_PROJECT_PATH=/home/dff652/TS-anomaly-detection/ts-iteration-loop
+    depends_on:
+      - redis
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8100 --reload
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+      - /home/share/data:/home/share/data
+      - /home/dff652/TS-anomaly-detection/ts-iteration-loop:/home/dff652/TS-anomaly-detection/ts-iteration-loop:ro
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - DATABASE_URL=sqlite+aiosqlite:///./data/inference_platform.db
+      - DATABASE_SYNC_URL=sqlite:///./data/inference_platform.db
+      - OLD_PROJECT_PATH=/home/dff652/TS-anomaly-detection/ts-iteration-loop
+    depends_on:
+      - redis
+    command: celery -A app.core.celery_app worker --loglevel=info
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+
+volumes:
+  redis_data:
