@@ -40,6 +40,12 @@ class ExecutionResult:
 
 GPU_METHODS = {"chatts", "qwen"}
 
+# Map platform algorithm_name → old project --method argument
+METHOD_NAME_MAP = {
+    "ensemble": "piecewise_linear",
+    "isolation_forest": "iforest",
+}
+
 
 class CLIExecutorAdapter:
     """Adapter that calls the old project's run.py via CLI subprocess."""
@@ -55,11 +61,12 @@ class CLIExecutorAdapter:
         return self.gpu_python_path if method in GPU_METHODS else self.cpu_python_path
 
     def _build_command(self, request: ExecutionRequest) -> list[str]:
+        cli_method = METHOD_NAME_MAP.get(request.method, request.method)
         python_path = self._get_python_path(request.method)
         cmd = [
             python_path,
             str(self.executor_script),
-            "--method", request.method,
+            "--method", cli_method,
             "--n_downsample", str(request.n_downsample),
             "--data_path", request.output_dir,
             "--task-id", str(request.task_id),
