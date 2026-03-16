@@ -79,16 +79,26 @@ async function handleSave() {
 }
 
 async function handleActivate(id) {
-  await modelApi.activate(id)
-  ElMessage.success('Model activated')
-  fetchModels()
+  try {
+    await modelApi.activate(id)
+    ElMessage.success('Model activated')
+    fetchModels()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || 'Failed to activate model')
+  }
 }
 
 async function handleArchive(id) {
-  await ElMessageBox.confirm('Archive this model?', 'Confirm')
-  await modelApi.archive(id)
-  ElMessage.success('Model archived')
-  fetchModels()
+  try {
+    await ElMessageBox.confirm('Archive this model?', 'Confirm')
+    await modelApi.archive(id)
+    ElMessage.success('Model archived')
+    fetchModels()
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error(e.response?.data?.detail || 'Failed to archive model')
+    }
+  }
 }
 
 onMounted(fetchModels)

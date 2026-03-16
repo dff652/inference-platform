@@ -2,7 +2,8 @@ import asyncio
 import json
 import logging
 from celery import Celery
-from datetime import datetime
+from celery.exceptions import SoftTimeLimitExceeded, Terminated
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.config import settings
@@ -117,14 +118,10 @@ def run_inference_task(self, task_id: int):
         params = dict(task.parameter_snapshot or {})
         input_snap = dict(task.input_snapshot or {})
 
-        # PENDING → QUEUED
-        task.status = TaskStatus.QUEUED
-        task.celery_task_id = self.request.id
-        db.commit()
-
-        # QUEUED → RUNNING
+        # PENDING → QUEUED → RUNNING (atomic commit)
         task.status = TaskStatus.RUNNING
-        task.started_at = datetime.utcnow()
+        task.celery_task_id = self.request.id
+        task.started_at = datetime.now(timezone.utc)
         db.commit()
 
     # --- Phase 2: Execute inference ---
@@ -147,7 +144,20 @@ def run_inference_task(self, task_id: int):
     )
 
     adapter = CLIExecutorAdapter()
-    result = _run_async(adapter.execute(request))
+    try:
+        result = _run_async(adapter.execute(request))
+    except (SoftTimeLimitExceeded, Terminated) as exc:
+        # Task was cancelled or timed out — kill subprocess and update status
+        _run_async(adapter.cancel(task_id))
+        with _get_sync_session() as db:
+            task = db.get(InferenceTask, task_id)
+            if task and task.status == TaskStatus.RUNNING:
+                task.status = TaskStatus.TIMEOUT if isinstance(exc, SoftTimeLimitExceeded) else TaskStatus.CANCELLED
+                task.completed_at = datetime.now(timezone.utc)
+                task.error_message = f"Task {type(exc).__name__}"
+                db.commit()
+        logger.warning(f"Task {task_id} interrupted: {type(exc).__name__}")
+        return {"task_id": task_id, "success": False, "reason": type(exc).__name__}
 
     # --- Phase 3: Save execution log ---
     log_path = Path(output_dir) / "execution.log"
@@ -157,7 +167,7 @@ def run_inference_task(self, task_id: int):
     # --- Phase 4: Update task status and write result index ---
     with _get_sync_session() as db:
         task = db.get(InferenceTask, task_id)
-        task.completed_at = datetime.utcnow()
+        task.completed_at = datetime.now(timezone.utc)
         task.log_ref = str(log_path)
 
         if result.success:

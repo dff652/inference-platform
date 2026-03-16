@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { taskApi } from '../api'
 
 const router = useRouter()
@@ -56,18 +57,33 @@ function filterByStatus(status) {
 }
 
 async function handleSubmit(id) {
-  await taskApi.submit(id)
-  fetchTasks()
+  try {
+    await taskApi.submit(id)
+    ElMessage.success('Task submitted')
+    fetchTasks()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || 'Failed to submit task')
+  }
 }
 
 async function handleCancel(id) {
-  await taskApi.cancel(id)
-  fetchTasks()
+  try {
+    await taskApi.cancel(id)
+    ElMessage.success('Task cancelled')
+    fetchTasks()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || 'Failed to cancel task')
+  }
 }
 
 async function handleRetry(id) {
-  await taskApi.retry(id)
-  fetchTasks()
+  try {
+    await taskApi.retry(id)
+    ElMessage.success('Task resubmitted')
+    fetchTasks()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || 'Failed to retry task')
+  }
 }
 
 onMounted(() => {

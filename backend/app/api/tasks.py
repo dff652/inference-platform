@@ -85,10 +85,17 @@ async def submit_task(task_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{task_id}/cancel", response_model=TaskResponse)
 async def cancel_task(task_id: int, db: AsyncSession = Depends(get_db)):
+    from app.core.celery_app import celery_app
+
     try:
         task = await TaskService.cancel_task(db, task_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    # Revoke the Celery task to terminate the worker subprocess
+    if task.celery_task_id:
+        celery_app.control.revoke(task.celery_task_id, terminate=True, signal="SIGTERM")
+
     return task
 
 

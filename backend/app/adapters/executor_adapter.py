@@ -2,12 +2,16 @@ import asyncio
 import json
 import logging
 import os
+import signal
 from pathlib import Path
 from dataclasses import dataclass, field
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Track active subprocess by task_id for cancellation support
+_active_processes: dict[int, asyncio.subprocess.Process] = {}
 
 
 @dataclass
@@ -95,7 +99,12 @@ class CLIExecutorAdapter:
                 cwd=str(self.project_path),
                 env=env,
             )
-            stdout, stderr = await process.communicate()
+            _active_processes[request.task_id] = process
+            try:
+                stdout, stderr = await process.communicate()
+            finally:
+                _active_processes.pop(request.task_id, None)
+
             stdout_str = stdout.decode("utf-8", errors="replace")
             stderr_str = stderr.decode("utf-8", errors="replace")
 
@@ -111,6 +120,7 @@ class CLIExecutorAdapter:
                 annotations=annotations,
             )
         except Exception as e:
+            _active_processes.pop(request.task_id, None)
             logger.exception(f"Executor failed for task {request.task_id}")
             return ExecutionResult(
                 success=False,
@@ -140,6 +150,20 @@ class CLIExecutorAdapter:
         return annotations
 
     async def cancel(self, task_id: int) -> bool:
-        logger.info(f"Cancel requested for task {task_id}")
-        # TODO: implement process tracking and SIGTERM
+        """Terminate the subprocess for a running task."""
+        process = _active_processes.get(task_id)
+        if not process:
+            logger.warning(f"Cancel: no active process for task {task_id}")
+            return False
+        logger.info(f"Sending SIGTERM to task {task_id} (pid={process.pid})")
+        try:
+            process.terminate()  # SIGTERM
+            try:
+                await asyncio.wait_for(process.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                logger.warning(f"Task {task_id} did not exit after SIGTERM, sending SIGKILL")
+                process.kill()  # SIGKILL
+        except ProcessLookupError:
+            pass  # already exited
+        _active_processes.pop(task_id, None)
         return True

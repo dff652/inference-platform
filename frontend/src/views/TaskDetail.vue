@@ -67,21 +67,33 @@ async function handleTabChange(tab) {
 }
 
 async function handleSubmit() {
-  await taskApi.submit(taskId.value)
-  ElMessage.success('Task submitted')
-  fetchTask()
+  try {
+    await taskApi.submit(taskId.value)
+    ElMessage.success('Task submitted')
+    fetchTask()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || 'Failed to submit task')
+  }
 }
 
 async function handleCancel() {
-  await taskApi.cancel(taskId.value)
-  ElMessage.success('Task cancelled')
-  fetchTask()
+  try {
+    await taskApi.cancel(taskId.value)
+    ElMessage.success('Task cancelled')
+    fetchTask()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || 'Failed to cancel task')
+  }
 }
 
 async function handleRetry() {
-  await taskApi.retry(taskId.value)
-  ElMessage.success('Task resubmitted')
-  fetchTask()
+  try {
+    await taskApi.retry(taskId.value)
+    ElMessage.success('Task resubmitted')
+    fetchTask()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || 'Failed to retry task')
+  }
 }
 
 const isRunning = computed(() =>
