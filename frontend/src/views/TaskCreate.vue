@@ -2,8 +2,10 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { taskApi, configApi, uploadApi } from '../api'
-import { gpuAlgorithms } from '../utils/constants'
+import { taskApi } from '../api/tasks'
+import { configApi } from '../api/configs'
+import { uploadApi } from '../api/uploads'
+import { gpuAlgorithms } from '../utils/task-constants'
 import { UploadFilled } from '@element-plus/icons-vue'
 
 const router = useRouter()

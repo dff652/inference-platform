@@ -2,8 +2,8 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { taskApi } from '../api'
-import { statusColors, cancellableStatuses, retryableStatuses } from '../utils/constants'
+import { taskApi } from '../api/tasks'
+import { statusColors, cancellableStatuses, retryableStatuses } from '../utils/task-constants'
 import TimeSeriesChart from '../components/TimeSeriesChart.vue'
 
 const route = useRoute()

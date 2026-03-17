@@ -2,8 +2,8 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { taskApi } from '../api'
-import { statusColors, statusLabels, cancellableStatuses, retryableStatuses } from '../utils/constants'
+import { taskApi } from '../api/tasks'
+import { statusColors, statusLabels, cancellableStatuses, retryableStatuses } from '../utils/task-constants'
 
 const router = useRouter()
 const tasks = ref([])

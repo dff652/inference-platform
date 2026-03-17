@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { modelApi, gpuApi } from '../api'
+import { modelApi, gpuApi } from '../api/models'
 
 const models = ref([])
 const loading = ref(false)
