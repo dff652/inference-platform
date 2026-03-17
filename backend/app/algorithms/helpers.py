@@ -142,6 +142,253 @@ def morphological_gradient(data, kernel_size=6):
     return dilated - eroded
 
 
+# --- Wavelet advanced processing ---
+# Migrated from: ts-iteration-loop/services/inference/wavelet.py
+
+
+def extract_outlier_features(data, outliers):
+    """Extract statistical features for each anomaly segment.
+
+    Returns an (N, 2) array with [mean_ratio, range_ratio] per segment,
+    used by cluster_based_outlier_split for KMeans/DBSCAN classification.
+    """
+    features = []
+    if hasattr(data, 'values'):
+        data_array = data.iloc[:, 0].values if data.ndim > 1 and data.shape[1] > 0 else np.array(data).ravel()
+    else:
+        data_array = np.array(data).ravel()
+
+    global_mean = np.mean(data_array)
+    global_range = np.max(data_array) - np.min(data_array)
+
+    for seg in outliers:
+        if len(seg) == 0:
+            continue
+        local_data = data_array[seg]
+        mean_val = np.mean(local_data)
+        range_val = np.max(local_data) - np.min(local_data)
+        mean_ratio = mean_val / global_mean if global_mean != 0 else 0
+        range_ratio = range_val / global_range if global_range != 0 else 0
+        features.append([mean_ratio, range_ratio])
+    return np.array(features) if features else np.empty((0, 2))
+
+
+def cluster_based_outlier_split(data, outliers, n_clusters=2, method='kmeans',
+                                random_state=42):
+    """Split outliers into global/local via clustering (KMeans/DBSCAN/Hierarchical).
+
+    Falls back to range_split_outliers if clustering fails or too few segments.
+    """
+    if len(outliers) < 2:
+        if len(outliers) == 1:
+            return np.array(outliers[0]), np.array([])
+        return np.array([]), np.array([])
+
+    try:
+        features = extract_outlier_features(data, outliers)
+        if features.shape[0] < n_clusters:
+            return range_split_outliers(data, outliers, range_th=0.1)
+
+        from sklearn.preprocessing import StandardScaler
+        features_scaled = StandardScaler().fit_transform(features)
+
+        if method == 'kmeans':
+            from sklearn.cluster import KMeans
+            clusterer = KMeans(n_clusters=n_clusters, random_state=random_state,
+                               n_init=10)
+        elif method == 'dbscan':
+            from sklearn.cluster import DBSCAN
+            from sklearn.neighbors import NearestNeighbors
+            nbrs = NearestNeighbors(
+                n_neighbors=min(3, len(features_scaled))).fit(features_scaled)
+            distances, _ = nbrs.kneighbors(features_scaled)
+            eps = np.percentile(distances[:, -1], 75)
+            clusterer = DBSCAN(eps=eps, min_samples=1)
+        elif method == 'hierarchical':
+            from sklearn.cluster import AgglomerativeClustering
+            clusterer = AgglomerativeClustering(n_clusters=n_clusters)
+        else:
+            raise ValueError(f"Unsupported clustering method: {method}")
+
+        labels = clusterer.fit_predict(features_scaled)
+        local_outliers, global_outliers = [], []
+        for outlier_seg, lbl in zip(outliers, labels):
+            if lbl == 0 or lbl == -1:
+                global_outliers.extend(outlier_seg)
+            else:
+                local_outliers.extend(outlier_seg)
+        return np.array(global_outliers), np.array(local_outliers)
+    except Exception:
+        return range_split_outliers(data, outliers, range_th=0.1)
+
+
+def adaptive_outlier_split(data, outliers, method='auto', **kwargs):
+    """Auto-select outlier split method: threshold for <3 segments, cluster otherwise."""
+    if method == 'auto':
+        if len(outliers) < 3:
+            method = 'threshold'
+        else:
+            features = extract_outlier_features(data, outliers)
+            method = 'cluster' if features.shape[0] >= 3 else 'threshold'
+
+    if method == 'threshold':
+        return range_split_outliers(data, outliers, kwargs.get('range_th', 0.1))
+    return cluster_based_outlier_split(
+        data, outliers,
+        n_clusters=kwargs.get('n_clusters', 2),
+        method=kwargs.get('cluster_method', 'kmeans'),
+        random_state=kwargs.get('random_state', 42),
+    )
+
+
+def cv_sort_local_outlier(signal, outliers, th=0.5):
+    """Sort and filter local outliers by coefficient of variation.
+
+    Keeps top (1-th) fraction of segments ranked by CV (descending).
+    Returns (cv_values, merged_indices).
+    """
+    cv_values = []
+    cv_indices = []
+    for outlier in outliers:
+        local_part = signal[outlier]
+        if len(local_part) > 1:
+            mean_part = np.mean(local_part)
+            cv_part = np.std(local_part) / mean_part if mean_part != 0 else np.std(local_part)
+        else:
+            cv_part = 0
+        cv_values.append(cv_part)
+        cv_indices.append(outlier)
+
+    sorted_pairs = sorted(zip(cv_values, cv_indices), reverse=True)
+    sorted_cv, sorted_idx = zip(*sorted_pairs) if sorted_pairs else ([], [])
+    num_select = max(1, int(len(sorted_cv) * (1 - th)))
+    selected = sorted_pairs[:num_select]
+    sel_cv, sel_idx = zip(*selected) if selected else ([], [])
+    merged = sorted(set(item for idx in sel_idx for item in idx))
+    return list(sel_cv), merged
+
+
+def refine_local_outliers(signal, outliers):
+    """Refine local outlier boundaries by sliding-window STD maximization.
+
+    For each outlier segment, expands search region by segment length in
+    both directions, then finds the window position with maximum STD.
+    """
+    refined = []
+    for outlier in outliers:
+        start_idx = max(outlier[0] - len(outlier), 0)
+        end_idx = min(outlier[-1] + len(outlier), len(signal))
+
+        right_parts = signal[start_idx:outlier[0]]
+        left_parts = signal[outlier[-1]:end_idx]
+        local_parts = signal[outlier]
+
+        right_std = np.std(right_parts) if len(right_parts) > 1 else 0
+        left_std = np.std(left_parts) if len(left_parts) > 1 else 0
+
+        if len(local_parts) == 1:
+            combined = np.concatenate([left_parts, local_parts, right_parts])
+            combined_start = start_idx
+        elif not np.isnan(left_std) and (np.isnan(right_std) or left_std > right_std):
+            combined = np.concatenate([left_parts, local_parts])
+            combined_start = start_idx
+        elif not np.isnan(right_std):
+            combined = np.concatenate([local_parts, right_parts])
+            combined_start = start_idx
+        else:
+            combined = local_parts
+            combined_start = outlier[0]
+
+        window_size = len(local_parts)
+        max_std = 0
+        max_seg = []
+        for i in range(len(combined) - window_size + 1):
+            window = combined[i:i + window_size]
+            if len(window) > 1:
+                w_std = np.std(window)
+                if w_std > max_std:
+                    max_std = w_std
+                    max_seg = list(range(combined_start + i,
+                                         combined_start + i + window_size))
+        if max_seg:
+            refined.extend(max_seg)
+    return np.array(refined)
+
+
+def combine_local_outliers(signal, outliers):
+    """Bidirectional iterative expansion of local outlier regions.
+
+    Expands each segment left and right (up to 10 steps) as long as
+    STD keeps increasing, capturing the full extent of the anomaly.
+    """
+    refined = []
+    for outlier in outliers:
+        start_idx = max(outlier[0] - len(outlier), 0)
+        end_idx = min(outlier[-1] + len(outlier), len(signal))
+
+        left_parts = signal[outlier[-1]:end_idx]
+        local_parts = signal[outlier]
+
+        left_std = np.std(left_parts) if len(left_parts) > 1 else 0
+        right_parts = signal[start_idx:outlier[0]]
+        right_std = np.std(right_parts) if len(right_parts) > 1 else 0
+
+        # Expand left
+        extend_left = 0
+        prev_std = left_std
+        while start_idx > 0 and extend_left < 10:
+            start_idx = max(start_idx - len(local_parts), 0)
+            left_parts = signal[start_idx:outlier[0]]
+            cur_std = np.std(left_parts) if len(left_parts) > 1 else 0
+            if cur_std > prev_std:
+                prev_std = cur_std
+                extend_left += 1
+            else:
+                break
+
+        # Expand right
+        extend_right = 0
+        prev_std = right_std
+        while end_idx < len(signal) and extend_right < 10:
+            end_idx = min(end_idx + len(local_parts), len(signal))
+            right_parts = signal[outlier[-1]:end_idx]
+            cur_std = np.std(right_parts) if len(right_parts) > 1 else 0
+            if cur_std > prev_std:
+                prev_std = cur_std
+                extend_right += 1
+            else:
+                break
+
+        refined.extend(list(range(start_idx, end_idx)))
+    return np.array(refined)
+
+
+def exclude_indices(data, indices):
+    """Return indices of data NOT in the given index list."""
+    if len(indices) == 0:
+        return np.arange(data.shape[0])
+    idx_arr = np.array(indices, dtype=int)
+    mask_arr = np.ones(data.shape[0], dtype=bool)
+    mask_arr[idx_arr] = False
+    return np.where(mask_arr)[0]
+
+
+def fit_and_replace_outliers(data, outliers, degree=2):
+    """Replace outlier segments with polynomial-fitted values."""
+    from numpy.polynomial.polynomial import Polynomial
+    continuous_groups = split_continuous_outliers(outliers)
+    data_fitted = np.copy(data)
+    for group in continuous_groups:
+        x_values = np.array(group)
+        y_values = data[x_values]
+        if len(x_values) > 1:
+            p = Polynomial.fit(x_values, y_values, degree)
+            data_fitted[x_values] = p(x_values)
+    return data_fitted
+
+
+# --- Piecewise regression ---
+
 def piecewise_linear(data):
     """Piecewise polynomial regression for trend fitting."""
     try:
