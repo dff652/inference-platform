@@ -124,6 +124,20 @@ MODELS = [
         "tags": ["cpu", "tree-based", "unsupervised"],
         "description": "Isolation Forest tree-based unsupervised anomaly detection.",
     },
+    {
+        "name": "STL-Wavelet",
+        "family": "stl_wavelet",
+        "runtime_type": "scipy",
+        "version": "v1.0",
+        "artifact_uri": None,
+        "compatibility": {
+            "python": "3.8+",
+            "gpu": "not_required",
+            "note": "Requires dense data via get_fulldata; slow on large datasets (~7min for 5000pts)",
+        },
+        "tags": ["cpu", "signal-processing", "stl-decomposition"],
+        "description": "STL seasonal decomposition + wavelet anomaly detection. Expands data to dense timestamps before analysis. Slow but thorough.",
+    },
 ]
 
 CONFIG_TEMPLATES = [
@@ -230,6 +244,19 @@ CONFIG_TEMPLATES = [
             "method": "isolation_forest",
             "n_downsample": 5000,
             "ratio": 0.1,
+        },
+        "env_profile": {
+            "python_path": "/home/dff652/miniconda3/envs/ts/bin/python",
+        },
+        "resource_profile": "cpu",
+    },
+    {
+        "name": "STL-Wavelet Default",
+        "algorithm_id": 7,
+        "algorithm_name": "stl_wavelet",
+        "default_params": {
+            "method": "stl_wavelet",
+            "n_downsample": 5000,
         },
         "env_profile": {
             "python_path": "/home/dff652/miniconda3/envs/ts/bin/python",

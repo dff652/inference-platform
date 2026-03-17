@@ -3,6 +3,8 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { taskApi } from '../api'
+import { statusColors, cancellableStatuses, retryableStatuses } from '../utils/constants'
+import TimeSeriesChart from '../components/TimeSeriesChart.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -11,21 +13,12 @@ const results = ref(null)
 const logs = ref('')
 const activeTab = ref('info')
 const loading = ref(true)
+const chartDataMap = ref({}) // resultId -> {series, segments, ...}
+const chartLoading = ref({})
 
 let pollTimer = null
 
 const taskId = computed(() => route.params.id)
-
-const statusColors = {
-  draft: 'info',
-  pending: 'warning',
-  queued: 'warning',
-  running: '',
-  completed: 'success',
-  failed: 'danger',
-  cancelled: 'info',
-  timeout: 'danger',
-}
 
 const duration = computed(() => {
   if (!task.value?.started_at) return null
@@ -49,6 +42,19 @@ async function fetchResults() {
     results.value = res.data
   } catch {
     results.value = null
+  }
+}
+
+async function loadChart(resultId) {
+  if (chartDataMap.value[resultId]) return
+  chartLoading.value[resultId] = true
+  try {
+    const res = await taskApi.chartData(taskId.value, resultId)
+    chartDataMap.value[resultId] = res.data
+  } catch {
+    chartDataMap.value[resultId] = null
+  } finally {
+    chartLoading.value[resultId] = false
   }
 }
 
@@ -97,7 +103,7 @@ async function handleRetry() {
 }
 
 const isRunning = computed(() =>
-  task.value && ['pending', 'queued', 'running'].includes(task.value.status)
+  task.value && cancellableStatuses.includes(task.value.status)
 )
 
 onMounted(() => {
@@ -130,7 +136,7 @@ onUnmounted(() => {
           <el-space>
             <el-button v-if="task.status === 'draft'" type="primary" @click="handleSubmit">Submit</el-button>
             <el-button v-if="isRunning" type="warning" @click="handleCancel">Cancel</el-button>
-            <el-button v-if="['failed','timeout'].includes(task.status)" type="info" @click="handleRetry">Retry</el-button>
+            <el-button v-if="retryableStatuses.includes(task.status)" type="info" @click="handleRetry">Retry</el-button>
             <el-button @click="router.push('/tasks')">Back</el-button>
           </el-space>
         </div>
@@ -189,18 +195,54 @@ onUnmounted(() => {
                   <template #default="{ row }">{{ row.score_max?.toFixed(2) }}</template>
                 </el-table-column>
                 <el-table-column prop="segment_count" label="Segments" width="100" />
+                <el-table-column label="Visualization" width="120">
+                  <template #default="{ row }">
+                    <el-button size="small" type="primary" @click="loadChart(row.id)" :loading="chartLoading[row.id]">
+                      {{ chartDataMap[row.id] ? 'Reload' : 'View Chart' }}
+                    </el-button>
+                  </template>
+                </el-table-column>
               </el-table>
 
               <template v-for="r in results.results" :key="r.id">
-                <el-divider v-if="r.segments">Anomaly Segments - {{ r.point_name }}</el-divider>
-                <el-table v-if="r.segments" :data="r.segments" stripe size="small">
-                  <el-table-column prop="start" label="Start" width="100" />
-                  <el-table-column prop="end" label="End" width="100" />
-                  <el-table-column prop="length" label="Length" width="100" />
-                  <el-table-column prop="score" label="Score" width="100">
-                    <template #default="{ row }">{{ row.score?.toFixed(2) }}</template>
-                  </el-table-column>
-                </el-table>
+                <!-- D3 Chart -->
+                <template v-if="chartDataMap[r.id]">
+                  <el-divider>{{ r.point_name }} - {{ r.method }}</el-divider>
+                  <TimeSeriesChart
+                    :series="chartDataMap[r.id].series"
+                    :segments="chartDataMap[r.id].segments"
+                    :point-name="chartDataMap[r.id].point_name"
+                    :method="chartDataMap[r.id].method"
+                  />
+                </template>
+
+                <!-- Segment table -->
+                <template v-if="r.segments && r.segments.length">
+                  <el-divider>Anomaly Segments - {{ r.point_name }}</el-divider>
+                  <el-table :data="r.segments" stripe size="small">
+                    <el-table-column prop="start" label="Start" width="80" />
+                    <el-table-column prop="end" label="End" width="80" />
+                    <el-table-column prop="length" label="Length" width="70" />
+                    <el-table-column label="Score" width="90">
+                      <template #default="{ row }">
+                        <el-tag
+                          :type="row.score >= 50 ? 'danger' : row.score >= 20 ? 'warning' : 'info'"
+                          size="small"
+                        >{{ row.score?.toFixed(1) }}</el-tag>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="KS p-value" width="100">
+                      <template #default="{ row }">{{ row.raw_p?.toFixed(4) }}</template>
+                    </el-table-column>
+                    <el-table-column label="Boundary L/R" width="130">
+                      <template #default="{ row }">
+                        {{ row.left?.toFixed(2) }} / {{ row.right?.toFixed(2) }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="label" label="Label" width="120" show-overflow-tooltip />
+                    <el-table-column prop="detail" label="Detail" min-width="200" show-overflow-tooltip />
+                  </el-table>
+                </template>
               </template>
             </template>
             <el-empty v-else description="No results available" />

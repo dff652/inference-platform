@@ -56,3 +56,13 @@ async def archive_model(model_id: int, db: AsyncSession = Depends(get_db)):
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
     return model
+
+
+@router.get("/vllm/status")
+async def vllm_status():
+    """Check health of all vLLM serving endpoints."""
+    from app.adapters.vllm_backend import check_vllm_health
+    return {
+        "chatts": await check_vllm_health("chatts"),
+        "qwen": await check_vllm_health("qwen"),
+    }

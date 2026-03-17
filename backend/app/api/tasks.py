@@ -1,3 +1,4 @@
+import csv
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -179,3 +180,54 @@ async def get_task_logs(task_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"Log file not found: {task.log_ref}")
 
     return log_path.read_text(encoding="utf-8", errors="replace")
+
+
+@router.get("/{task_id}/results/{result_id}/chart-data")
+async def get_result_chart_data(
+    task_id: int,
+    result_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get time series + segments data for D3 visualization."""
+    idx = await db.get(InferenceResultIndex, result_id)
+    if not idx or idx.task_id != task_id:
+        raise HTTPException(status_code=404, detail="Result not found")
+
+    # Read CSV data
+    series_data = []
+    if idx.result_path and Path(idx.result_path).exists():
+        with open(idx.result_path, newline="") as f:
+            reader = csv.DictReader(f)
+            headers = reader.fieldnames or []
+            # Find value column (second column, after Time)
+            value_col = headers[1] if len(headers) > 1 else None
+            for row in reader:
+                point = {"time": row.get("Time", ""), "index": len(series_data)}
+                if value_col:
+                    try:
+                        point["value"] = float(row[value_col])
+                    except (ValueError, TypeError):
+                        point["value"] = None
+                point["outlier"] = int(row.get("outlier_mask", 0) or 0)
+                point["global_mask"] = int(row.get("global_mask", 0) or 0)
+                series_data.append(point)
+
+    # Read segments
+    import json
+    segments = []
+    if idx.segments_path and Path(idx.segments_path).exists():
+        try:
+            with open(idx.segments_path) as f:
+                segments = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return {
+        "point_name": idx.point_name,
+        "method": idx.method,
+        "score_avg": idx.score_avg,
+        "score_max": idx.score_max,
+        "segment_count": idx.segment_count,
+        "series": series_data,
+        "segments": segments,
+    }

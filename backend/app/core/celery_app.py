@@ -27,6 +27,12 @@ celery_app.conf.update(
     task_time_limit=settings.TASK_TIMEOUT_SECONDS + 60,
     worker_concurrency=settings.MAX_CONCURRENT_TASKS,
     worker_prefetch_multiplier=1,
+    beat_schedule={
+        "sweep-stuck-tasks": {
+            "task": "inference.sweep_stuck_tasks",
+            "schedule": 60.0,  # every 60 seconds
+        },
+    },
 )
 
 
@@ -100,11 +106,147 @@ def _write_result_index(db_session, task_id: int, output_dir: str, method: str):
     db_session.flush()
 
 
+def _run_direct(task_id, method, input_snap, output_dir, params):
+    """Execute a CPU algorithm directly via the dispatcher (no subprocess)."""
+    from app.algorithms.dispatcher import run as dispatcher_run
+    from app.adapters.executor_adapter import ExecutionResult
+
+    input_files = input_snap.get("files", [])
+    if not input_files:
+        return ExecutionResult(
+            success=False, return_code=1,
+            stdout="", stderr="No input files provided",
+        )
+
+    all_result_files = []
+    errors = []
+    stdout_parts = []
+
+    threshold = params.get("threshold")
+    n_downsample = params.get("n_downsample", 5000)
+    extra_args = {k: v for k, v in params.items()
+                  if k not in ("method", "threshold", "n_downsample")}
+
+    for input_file in input_files:
+        logger.info(f"Task {task_id}: running {method} on {input_file}")
+        result = dispatcher_run(
+            method=method,
+            input_file=input_file,
+            output_dir=output_dir,
+            task_id=task_id,
+            n_downsample=n_downsample,
+            threshold=threshold,
+            extra_args=extra_args,
+        )
+        stdout_parts.append(f"[{input_file}] success={result['success']}")
+        if result["success"]:
+            all_result_files.extend(result["result_files"])
+        else:
+            errors.append(f"[{input_file}] {result['error']}")
+
+    success = len(errors) == 0
+    return ExecutionResult(
+        success=success,
+        return_code=0 if success else 1,
+        stdout="\n".join(stdout_parts),
+        stderr="\n".join(errors),
+        result_files=all_result_files,
+        annotations=[],
+    )
+
+
+def _run_vllm(task_id, method, input_snap, output_dir, params):
+    """Execute a GPU algorithm via vLLM API (async, run in event loop)."""
+    from app.algorithms.dispatcher import run_vllm
+    from app.adapters.executor_adapter import ExecutionResult
+
+    input_files = input_snap.get("files", [])
+    if not input_files:
+        return ExecutionResult(
+            success=False, return_code=1,
+            stdout="", stderr="No input files provided",
+        )
+
+    all_result_files = []
+    errors = []
+    stdout_parts = []
+
+    n_downsample = params.get("n_downsample", 5000)
+    extra_args = {k: v for k, v in params.items()
+                  if k not in ("method", "n_downsample")}
+
+    for input_file in input_files:
+        logger.info(f"Task {task_id}: running {method} (vLLM) on {input_file}")
+        result = _run_async(run_vllm(
+            method=method,
+            input_file=input_file,
+            output_dir=output_dir,
+            task_id=task_id,
+            n_downsample=n_downsample,
+            extra_args=extra_args,
+        ))
+        stdout_parts.append(f"[{input_file}] success={result['success']}")
+        if result["success"]:
+            all_result_files.extend(result["result_files"])
+        else:
+            errors.append(f"[{input_file}] {result['error']}")
+
+    success = len(errors) == 0
+    return ExecutionResult(
+        success=success,
+        return_code=0 if success else 1,
+        stdout="\n".join(stdout_parts),
+        stderr="\n".join(errors),
+        result_files=all_result_files,
+        annotations=[],
+    )
+
+
+def _run_subprocess(celery_task, task_id, method, input_snap, output_dir, params):
+    """Execute an inference job via the old project's subprocess adapter."""
+    from app.adapters.executor_adapter import CLIExecutorAdapter, ExecutionRequest
+
+    input_files = input_snap.get("files", [])
+    adapter = CLIExecutorAdapter()
+
+    request = ExecutionRequest(
+        task_id=task_id,
+        method=method,
+        input_files=input_files,
+        output_dir=output_dir,
+        model_path=params.get("model_path"),
+        lora_adapter_path=params.get("lora_adapter_path"),
+        load_in_4bit=params.get("load_in_4bit", "auto"),
+        n_downsample=params.get("n_downsample", 5000),
+        device=params.get("device"),
+        extra_args={k: v for k, v in params.items()
+                    if k not in ("method", "model_path", "lora_adapter_path",
+                                 "load_in_4bit", "n_downsample", "device")},
+    )
+
+    try:
+        return _run_async(adapter.execute(request))
+    except SoftTimeLimitExceeded:
+        logger.warning(f"Task {task_id} hit soft time limit")
+        _run_async(adapter.cancel(task_id))
+        from app.adapters.executor_adapter import ExecutionResult
+        return ExecutionResult(
+            success=False, return_code=-1,
+            stdout="", stderr=f"Task exceeded time limit ({settings.TASK_TIMEOUT_SECONDS}s)",
+        )
+    except Terminated:
+        logger.info(f"Task {task_id} was terminated (cancelled)")
+        from app.adapters.executor_adapter import ExecutionResult
+        return ExecutionResult(
+            success=False, return_code=-1,
+            stdout="", stderr="Task was cancelled",
+        )
+
+
 @celery_app.task(bind=True, name="inference.run")
 def run_inference_task(self, task_id: int):
-    """Celery task: execute an inference job via the executor adapter."""
+    """Celery task: execute an inference job via direct call or subprocess."""
     from app.models.inference_task import InferenceTask, TaskStatus
-    from app.adapters.executor_adapter import CLIExecutorAdapter, ExecutionRequest
 
     # --- Phase 1: Load task data and transition PENDING → QUEUED → RUNNING ---
     with _get_sync_session() as db:
@@ -130,34 +272,14 @@ def run_inference_task(self, task_id: int):
 
     method = algorithm_name or params.get("method", "chatts")
 
-    request = ExecutionRequest(
-        task_id=task_id,
-        method=method,
-        input_files=input_snap.get("files", []),
-        output_dir=output_dir,
-        model_path=params.get("model_path"),
-        lora_adapter_path=params.get("lora_adapter_path"),
-        load_in_4bit=params.get("load_in_4bit", "auto"),
-        n_downsample=params.get("n_downsample", 5000),
-        device=params.get("device"),
-        extra_args=params.get("extra_args", {}),
-    )
-
-    adapter = CLIExecutorAdapter()
-    try:
-        result = _run_async(adapter.execute(request))
-    except (SoftTimeLimitExceeded, Terminated) as exc:
-        # Task was cancelled or timed out — kill subprocess and update status
-        _run_async(adapter.cancel(task_id))
-        with _get_sync_session() as db:
-            task = db.get(InferenceTask, task_id)
-            if task and task.status == TaskStatus.RUNNING:
-                task.status = TaskStatus.TIMEOUT if isinstance(exc, SoftTimeLimitExceeded) else TaskStatus.CANCELLED
-                task.completed_at = datetime.now(timezone.utc)
-                task.error_message = f"Task {type(exc).__name__}"
-                db.commit()
-        logger.warning(f"Task {task_id} interrupted: {type(exc).__name__}")
-        return {"task_id": task_id, "success": False, "reason": type(exc).__name__}
+    # Route: CPU → direct Python; GPU (vLLM) → async API call; fallback → subprocess
+    from app.algorithms.dispatcher import is_direct_method, is_vllm_method
+    if is_direct_method(method):
+        result = _run_direct(task_id, method, input_snap, output_dir, params)
+    elif is_vllm_method(method):
+        result = _run_vllm(task_id, method, input_snap, output_dir, params)
+    else:
+        result = _run_subprocess(self, task_id, method, input_snap, output_dir, params)
 
     # --- Phase 3: Save execution log ---
     log_path = Path(output_dir) / "execution.log"
@@ -202,3 +324,38 @@ def run_inference_task(self, task_id: int):
 
     logger.info(f"Task {task_id} finished: success={result.success}")
     return {"task_id": task_id, "success": result.success}
+
+
+@celery_app.task(name="inference.sweep_stuck_tasks")
+def sweep_stuck_tasks():
+    """Periodic task: detect tasks stuck in RUNNING/PENDING beyond timeout and mark as TIMEOUT."""
+    from sqlalchemy import select
+    from app.models.inference_task import InferenceTask, TaskStatus
+
+    timeout_seconds = settings.TASK_TIMEOUT_SECONDS
+    now = datetime.now(timezone.utc)
+
+    with _get_sync_session() as db:
+        # Find RUNNING tasks that exceeded timeout
+        stmt = select(InferenceTask).where(
+            InferenceTask.status.in_([TaskStatus.RUNNING, TaskStatus.PENDING, TaskStatus.QUEUED]),
+            InferenceTask.started_at.isnot(None),
+        )
+        result = db.execute(stmt)
+        tasks = result.scalars().all()
+
+        timed_out = 0
+        for task in tasks:
+            elapsed = (now - task.started_at.replace(tzinfo=timezone.utc)).total_seconds()
+            if elapsed > timeout_seconds + 120:  # grace period of 2 minutes beyond soft limit
+                task.status = TaskStatus.TIMEOUT
+                task.completed_at = now
+                task.error_message = f"Task timed out after {int(elapsed)}s (limit: {timeout_seconds}s)"
+                timed_out += 1
+                logger.warning(f"Sweep: task {task.id} timed out ({int(elapsed)}s)")
+
+        if timed_out:
+            db.commit()
+            logger.info(f"Sweep: marked {timed_out} task(s) as TIMEOUT")
+
+    return {"timed_out": timed_out}

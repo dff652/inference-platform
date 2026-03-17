@@ -32,7 +32,9 @@ class Settings(BaseSettings):
     # Data paths
     DATA_ROOT: str = str(DATA_DIR)
     DATA_INFERENCE_DIR: str = str(DATA_DIR / "inference")
-    MODEL_ARTIFACT_DIR: str = "/home/share/models"
+    MODEL_ARTIFACT_DIR: str = "/home/data1/llm_models"
+    CHATTS_MODEL_PATH: str = "/home/data1/llm_models/bytedance-research/ChatTS-8B"
+    QWEN_MODEL_PATH: str = "/home/data1/llm_models/Qwen/Qwen3-VL-8B-Instruct"
 
     # API
     API_PREFIX: str = "/api/v1"
@@ -41,6 +43,12 @@ class Settings(BaseSettings):
     # Task defaults
     TASK_TIMEOUT_SECONDS: int = 3600
     MAX_CONCURRENT_TASKS: int = 4
+
+    # vLLM serving endpoints (OpenAI-compatible API)
+    VLLM_CHATTS_ENDPOINT: str = "http://localhost:8001/v1"
+    VLLM_QWEN_ENDPOINT: str = "http://localhost:8002/v1"
+    VLLM_REQUEST_TIMEOUT: int = 120
+    VLLM_MAX_TOKENS: int = 512
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

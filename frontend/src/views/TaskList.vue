@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { taskApi } from '../api'
+import { statusColors, statusLabels, cancellableStatuses, retryableStatuses } from '../utils/constants'
 
 const router = useRouter()
 const tasks = ref([])
@@ -16,17 +17,6 @@ const filters = ref({
 })
 
 let pollTimer = null
-
-const statusColors = {
-  draft: 'info',
-  pending: 'warning',
-  queued: 'warning',
-  running: '',
-  completed: 'success',
-  failed: 'danger',
-  cancelled: 'info',
-  timeout: 'danger',
-}
 
 async function fetchTasks() {
   loading.value = true
@@ -100,10 +90,7 @@ onUnmounted(() => {
   <div>
     <!-- Stats Cards -->
     <el-row :gutter="16" style="margin-bottom: 20px">
-      <el-col :span="3" v-for="(label, key) in {
-        draft: 'Draft', pending: 'Pending', queued: 'Queued', running: 'Running',
-        completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled', timeout: 'Timeout'
-      }" :key="key">
+      <el-col :span="3" v-for="(label, key) in statusLabels" :key="key">
         <el-card
           shadow="hover"
           :class="{ 'is-active': filters.status === key }"
@@ -160,8 +147,8 @@ onUnmounted(() => {
       <el-table-column label="Actions" width="200" fixed="right">
         <template #default="{ row }">
           <el-button v-if="row.status === 'draft'" type="primary" size="small" @click="handleSubmit(row.id)">Submit</el-button>
-          <el-button v-if="['pending','queued','running'].includes(row.status)" type="warning" size="small" @click="handleCancel(row.id)">Cancel</el-button>
-          <el-button v-if="['failed','timeout'].includes(row.status)" type="info" size="small" @click="handleRetry(row.id)">Retry</el-button>
+          <el-button v-if="cancellableStatuses.includes(row.status)" type="warning" size="small" @click="handleCancel(row.id)">Cancel</el-button>
+          <el-button v-if="retryableStatuses.includes(row.status)" type="info" size="small" @click="handleRetry(row.id)">Retry</el-button>
           <el-button size="small" @click="router.push(`/tasks/${row.id}`)">Detail</el-button>
         </template>
       </el-table-column>

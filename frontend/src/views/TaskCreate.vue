@@ -1,11 +1,14 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { taskApi, configApi } from '../api'
+import { taskApi, configApi, uploadApi } from '../api'
+import { gpuAlgorithms } from '../utils/constants'
+import { UploadFilled } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const algorithms = ref([])
+const chattsPrompts = ref([])
 const submitting = ref(false)
 
 const form = ref({
@@ -14,22 +17,45 @@ const form = ref({
   submitter: '',
   input_files: '',
   n_downsample: 5000,
-  model_path: '',
-  lora_adapter_path: '',
-  load_in_4bit: false,
+  prompt_template: 'default',
+  max_tokens: 2048,
   submit_now: true,
 })
 
-const gpuAlgorithms = ['chatts', 'qwen']
+const isGpu = computed(() => gpuAlgorithms.includes(form.value.algorithm_name))
+const isChatts = computed(() => form.value.algorithm_name === 'chatts')
+
+const uploadedFiles = ref([])
+const inputMode = ref('upload') // 'upload' or 'manual'
+
+async function handleUpload(options) {
+  const formData = new FormData()
+  formData.append('files', options.file)
+  try {
+    const res = await uploadApi.upload(formData)
+    const files = res.data.files || []
+    for (const f of files) {
+      uploadedFiles.value.push({ name: f.filename, path: f.path, size: f.size })
+    }
+    options.onSuccess(res.data)
+  } catch (e) {
+    options.onError(e)
+    ElMessage.error(e.response?.data?.detail || 'Upload failed')
+  }
+}
+
+function handleRemoveFile(file) {
+  const idx = uploadedFiles.value.findIndex(f => f.name === file.name)
+  if (idx >= 0) uploadedFiles.value.splice(idx, 1)
+}
 
 onMounted(async () => {
   try {
     const res = await configApi.algorithms()
-    // API returns [{id, name, display_name, description}, ...]
     algorithms.value = (res.data.algorithms || res.data).map(a => ({
       name: a.name,
       label: a.display_name || a.name,
-      resource: ['chatts', 'qwen'].includes(a.name) ? 'gpu' : 'cpu',
+      resource: a.resource || (['chatts', 'qwen'].includes(a.name) ? 'gpu' : 'cpu'),
     }))
   } catch {
     algorithms.value = [
@@ -39,27 +65,43 @@ onMounted(async () => {
       { name: 'ensemble', label: 'Ensemble', resource: 'cpu' },
       { name: 'wavelet', label: 'Wavelet', resource: 'cpu' },
       { name: 'isolation_forest', label: 'Isolation Forest', resource: 'cpu' },
+      { name: 'stl_wavelet', label: 'STL-Wavelet', resource: 'cpu' },
     ]
+  }
+  // Load ChatTS prompt templates
+  try {
+    const res = await configApi.chattsPrompts()
+    chattsPrompts.value = res.data || []
+  } catch {
+    chattsPrompts.value = [{ key: 'default', name: '默认精简版', description: '精简JSON格式' }]
   }
 })
 
 async function handleSubmit() {
-  if (!form.value.task_name || !form.value.algorithm_name || !form.value.input_files) {
-    ElMessage.warning('Please fill in required fields')
+  const hasUploadedFiles = inputMode.value === 'upload' && uploadedFiles.value.length > 0
+  const hasManualFiles = inputMode.value === 'manual' && form.value.input_files.trim()
+
+  if (!form.value.task_name || !form.value.algorithm_name || (!hasUploadedFiles && !hasManualFiles)) {
+    ElMessage.warning('Please fill in required fields (including input files)')
     return
   }
 
   submitting.value = true
   try {
-    const files = form.value.input_files.split('\n').map(f => f.trim()).filter(Boolean)
+    const files = inputMode.value === 'upload'
+      ? uploadedFiles.value.map(f => f.path)
+      : form.value.input_files.split('\n').map(f => f.trim()).filter(Boolean)
 
     const params = {
       method: form.value.algorithm_name,
       n_downsample: form.value.n_downsample,
     }
-    if (form.value.model_path) params.model_path = form.value.model_path
-    if (form.value.lora_adapter_path) params.lora_adapter_path = form.value.lora_adapter_path
-    if (form.value.load_in_4bit) params.load_in_4bit = true
+    if (isGpu.value) {
+      params.max_tokens = form.value.max_tokens
+    }
+    if (isChatts.value && form.value.prompt_template !== 'default') {
+      params.prompt_template = form.value.prompt_template
+    }
 
     const payload = {
       task_name: form.value.task_name,
@@ -111,7 +153,29 @@ async function handleSubmit() {
       </el-form-item>
 
       <el-form-item label="Input Files" required>
+        <el-radio-group v-model="inputMode" style="margin-bottom: 12px">
+          <el-radio-button value="upload">Upload Files</el-radio-button>
+          <el-radio-button value="manual">Manual Path</el-radio-button>
+        </el-radio-group>
+
+        <el-upload
+          v-if="inputMode === 'upload'"
+          drag
+          multiple
+          :http-request="handleUpload"
+          :on-remove="handleRemoveFile"
+          accept=".csv,.txt,.xlsx,.xls"
+          style="width: 100%"
+        >
+          <el-icon :size="40" style="color: #909399; margin-bottom: 8px"><UploadFilled /></el-icon>
+          <div>Drop CSV files here or <em>click to browse</em></div>
+          <template #tip>
+            <div style="color: #909399; font-size: 12px">Supports .csv, .txt, .xlsx, .xls (max 100MB each)</div>
+          </template>
+        </el-upload>
+
         <el-input
+          v-else
           v-model="form.input_files"
           type="textarea"
           :rows="3"
@@ -128,19 +192,25 @@ async function handleSubmit() {
       </el-form-item>
 
       <!-- GPU model options -->
-      <template v-if="gpuAlgorithms.includes(form.algorithm_name)">
+      <template v-if="isGpu">
         <el-divider>GPU Model Options</el-divider>
 
-        <el-form-item label="Model Path">
-          <el-input v-model="form.model_path" placeholder="/home/share/llm_models/..." />
+        <el-form-item v-if="isChatts" label="Prompt Template">
+          <el-select v-model="form.prompt_template" style="width: 100%">
+            <el-option
+              v-for="p in chattsPrompts"
+              :key="p.key"
+              :label="p.name"
+              :value="p.key"
+            >
+              <span>{{ p.name }}</span>
+              <span style="color: #909399; font-size: 12px; margin-left: 8px">{{ p.description }}</span>
+            </el-option>
+          </el-select>
         </el-form-item>
 
-        <el-form-item label="LoRA Adapter">
-          <el-input v-model="form.lora_adapter_path" placeholder="(optional)" />
-        </el-form-item>
-
-        <el-form-item label="4-bit Quantize">
-          <el-switch v-model="form.load_in_4bit" />
+        <el-form-item label="Max Tokens">
+          <el-input-number v-model="form.max_tokens" :min="256" :max="8192" :step="256" />
         </el-form-item>
       </template>
 

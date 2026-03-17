@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api import tasks, models, configs, data_sources
+from app.api import tasks, models, configs, data_sources, uploads, predict
 
 
 @asynccontextmanager
@@ -38,6 +38,8 @@ app.include_router(tasks.router, prefix=settings.API_PREFIX)
 app.include_router(models.router, prefix=settings.API_PREFIX)
 app.include_router(configs.router, prefix=settings.API_PREFIX)
 app.include_router(data_sources.router, prefix=settings.API_PREFIX)
+app.include_router(uploads.router, prefix=settings.API_PREFIX)
+app.include_router(predict.router, prefix=settings.API_PREFIX)
 
 
 @app.get("/health")

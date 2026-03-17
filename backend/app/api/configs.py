@@ -10,18 +10,36 @@ router = APIRouter(prefix="/inference/configs", tags=["Inference Configs"])
 
 
 SUPPORTED_ALGORITHMS = [
-    {"id": 1, "name": "chatts", "display_name": "ChatTS", "description": "ChatTS-8B time series anomaly detection"},
-    {"id": 2, "name": "qwen", "display_name": "Qwen-VL", "description": "Qwen-3-VL multimodal detection"},
-    {"id": 3, "name": "adtk_hbos", "display_name": "ADTK-HBOS", "description": "Statistical anomaly detection"},
-    {"id": 4, "name": "ensemble", "display_name": "Ensemble", "description": "Multi-method voting ensemble"},
-    {"id": 5, "name": "wavelet", "display_name": "Wavelet", "description": "Wavelet decomposition analysis"},
-    {"id": 6, "name": "isolation_forest", "display_name": "Isolation Forest", "description": "Tree-based anomaly detection"},
+    {"id": 1, "name": "chatts", "display_name": "ChatTS", "description": "ChatTS-8B time series anomaly detection", "resource": "gpu"},
+    {"id": 2, "name": "qwen", "display_name": "Qwen-VL", "description": "Qwen-3-VL multimodal detection", "resource": "gpu"},
+    {"id": 3, "name": "adtk_hbos", "display_name": "ADTK-HBOS", "description": "Statistical anomaly detection", "resource": "cpu"},
+    {"id": 4, "name": "ensemble", "display_name": "Ensemble", "description": "Multi-method voting ensemble", "resource": "cpu"},
+    {"id": 5, "name": "wavelet", "display_name": "Wavelet", "description": "Wavelet decomposition analysis", "resource": "cpu"},
+    {"id": 6, "name": "isolation_forest", "display_name": "Isolation Forest", "description": "Tree-based anomaly detection", "resource": "cpu"},
+    {"id": 7, "name": "stl_wavelet", "display_name": "STL-Wavelet", "description": "STL decomposition + wavelet analysis", "resource": "cpu"},
 ]
 
 
 @router.get("/algorithms")
 async def list_algorithms():
     return SUPPORTED_ALGORITHMS
+
+
+@router.get("/chatts-prompts")
+async def list_chatts_prompts():
+    """List available ChatTS prompt templates."""
+    import json
+    from pathlib import Path
+    prompts_file = Path(__file__).parent.parent / "algorithms" / "configs" / "chatts_prompts.json"
+    try:
+        with open(prompts_file) as f:
+            templates = json.load(f)
+        return [
+            {"key": k, "name": v.get("name", k), "description": v.get("description", "")}
+            for k, v in templates.items()
+        ]
+    except (json.JSONDecodeError, OSError):
+        return [{"key": "default", "name": "默认精简版", "description": "精简JSON格式，4个核心字段"}]
 
 
 @router.post("", response_model=ConfigResponse, status_code=201)

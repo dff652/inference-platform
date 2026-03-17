@@ -37,6 +37,9 @@ export const taskApi = {
   logs(id) {
     return api.get(`/inference/tasks/${id}/logs`)
   },
+  chartData(taskId, resultId) {
+    return api.get(`/inference/tasks/${taskId}/results/${resultId}/chart-data`)
+  },
 }
 
 // Models
@@ -61,10 +64,30 @@ export const modelApi = {
   },
 }
 
+// Uploads
+export const uploadApi = {
+  upload(formData) {
+    return api.post('/uploads', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    })
+  },
+}
+
 // Configs
 export const configApi = {
   algorithms() {
     return api.get('/inference/configs/algorithms')
+  },
+  chattsPrompts() {
+    return api.get('/inference/configs/chatts-prompts')
+  },
+}
+
+// GPU service status
+export const gpuApi = {
+  status() {
+    return api.get('/models/vllm/status')
   },
 }
 
